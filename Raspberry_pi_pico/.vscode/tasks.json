@@ -23,7 +23,25 @@
             "command": "${env:HOME}/.pico-sdk/picotool/2.1.1/picotool/picotool",
             "args": [
                 "load",
-                "${command:raspberry-pi-pico.launchTargetPath}",
+                "${workspaceFolder}/build/${workspaceFolderBasename}.uf2",
+                "-fx"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": [],
+            "windows": {
+                "command": "${env:USERPROFILE}/.pico-sdk/picotool/2.1.1/picotool/picotool.exe"
+            }
+        },
+        {
+            "label": "Load to Flash",
+            "type": "process",
+            "command": "${env:HOME}/.pico-sdk/picotool/2.1.1/picotool/picotool",
+            "args": [
+                "load",
+                "${workspaceFolder}/build/Raspberry_pi_pico.uf2",
                 "-fx"
             ],
             "presentation": {

@@ -1,1 +1,4 @@
 build
+!.vscode/*
+results
+backupRaspberry_pi_pico copy.cpp
