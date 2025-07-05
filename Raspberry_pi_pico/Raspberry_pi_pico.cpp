@@ -149,7 +149,7 @@
 
 #define NRF_CHANNEL 2  // Default channel for NRF24L01 (2.4GHz band)
 #define NODE_ID "01"    // Node identifier
-#define MAX_PAYLOAD_SIZE 10  // NRF24L01 max payload size
+#define MAX_PAYLOAD_SIZE 24  // NRF24L01 max payload size (increased from 10 to 24)
 uint8_t address[5] = {'g','y','r','o','c'};  // 5-byte address gyroc
 // GPS location structure
 struct gps_location_t {
@@ -161,6 +161,7 @@ struct gps_location_t {
 // Message structure for transmitting data
 typedef struct {
     char node_id[3];        // 2 chars + null terminator
+    uint16_t msg_id;        // Message ID (0-65535)
     char date[11];          // DD/MM/YYYY + null terminator
     char time[9];           // HH:MM:SS + null terminator
     char latitude[12];      // Including decimal point and sign
@@ -198,7 +199,10 @@ static bool gps_datetime_valid = false;
 
 // Audio buffer
 static int32_t audio_buffer[SAMPLE_BUFFER_SIZE];
-NRF24 nrf = NRF24(spi0, NRF_SCK_PIN, NRF_MOSI_PIN, NRF_MISO_PIN, NRF_CSN_PIN, NRF_CE_PIN, NRF_IRQ_PIN);
+
+// Global NRF24 object
+NRF24 nrf(NRF_SPI_PORT, NRF_SCK_PIN, NRF_MOSI_PIN, NRF_MISO_PIN, 
+          NRF_CSN_PIN, NRF_CE_PIN, NRF_IRQ_PIN);
 
 void init_sync(void);
 void init_uart(void);
@@ -456,12 +460,6 @@ void process_gps() {
     // can disable or adjust frequency as needed
     // this is only to show the GPS status this is not an error message
     static uint32_t last_status = 0;
-    // if (now - last_status >= 30000) {  // Changed from 5000 to 30000 (30 seconds)
-    //     safe_printf("\r\n[GPS] Status: Sentences: %lu, Last valid: %lu ms ago\r\n", 
-    //                 sentence_count,
-    //                 now - last_valid_sentence);
-    //     last_status = now;
-    // }
 }
 // Safe printf function
 void safe_printf(const char* format, ...) {
@@ -553,9 +551,7 @@ bool parse_gprmc(const char* sentence, float* out_lat, float* out_lon, bool* out
             int year_int = atoi(year) + 2000;  // Convert YY to 20YY
             snprintf(gps_date, sizeof(gps_date), "%s/%s/%04d", day, month, year_int);
             
-            gps_datetime_valid = true;
-            printf("[GPS] Updated date/time: %s %s\n", gps_date, gps_time);
-            
+            gps_datetime_valid = true;           
             mutex_exit(&gps_mutex);
         }
         
@@ -590,17 +586,21 @@ typedef struct {
     uint8_t fragment_num;  // Current fragment number (0-based)
     uint8_t total_fragments; // Total number of fragments
     uint8_t data_length;   // Length of data in this fragment
-    uint8_t data[6];       // Data payload (10 - 4 header bytes = 6 data bytes)
+    uint8_t data[20];      // Data payload (24 - 4 header bytes = 20 data bytes)
 } fragment_packet_t;
 
 // Global message ID counter
 static uint8_t g_message_id = 0;
+
+// Global gunshot message ID counter
+static uint16_t g_gunshot_msg_id = 1;  // Start from 1 for readability
+
 // Send message via NRF24L01 with fragmentation support
 void nrf24l01_send_message(const char* message) {
     if (!message) return;
     
     size_t message_length = strlen(message);
-    const uint8_t MAX_DATA_PER_FRAGMENT = 6; // 10 byte payload - 4 byte header
+    const uint8_t MAX_DATA_PER_FRAGMENT = 20; // 24 byte payload - 4 byte header
     
     // Calculate number of fragments needed
     size_t total_fragments = (message_length + MAX_DATA_PER_FRAGMENT - 1) / MAX_DATA_PER_FRAGMENT;
@@ -613,20 +613,6 @@ void nrf24l01_send_message(const char* message) {
     
     // Assign unique message ID
     uint8_t current_msg_id = g_message_id++;
-    
-    // char debug_buf[256];
-    // snprintf(debug_buf, sizeof(debug_buf), "\r\n=== SENDING MESSAGE ===\r\n");
-    // safe_uart_puts(debug_buf);
-    // snprintf(debug_buf, sizeof(debug_buf), "Original Message: \"%s\"\r\n", message);
-    // safe_uart_puts(debug_buf);
-    // snprintf(debug_buf, sizeof(debug_buf), "Message Length: %zu bytes\r\n", message_length);
-    // safe_uart_puts(debug_buf);
-    // snprintf(debug_buf, sizeof(debug_buf), "Message ID: %d\r\n", current_msg_id);
-    // safe_uart_puts(debug_buf);
-    // snprintf(debug_buf, sizeof(debug_buf), "Total Fragments: %zu\r\n", total_fragments);
-    // safe_uart_puts(debug_buf);
-    // snprintf(debug_buf, sizeof(debug_buf), "----------------------\r\n");
-    // safe_uart_puts(debug_buf);
     
     for (size_t fragment_num = 0; fragment_num < total_fragments; fragment_num++) {
         fragment_packet_t packet;
@@ -647,69 +633,22 @@ void nrf24l01_send_message(const char* message) {
         memset(packet.data, 0, sizeof(packet.data));
         memcpy(packet.data, message + start_pos, data_length);
         
-        // Display fragment details
-        // snprintf(debug_buf, sizeof(debug_buf), "Fragment %zu/%zu:\r\n", fragment_num + 1, total_fragments);
-        // safe_uart_puts(debug_buf);
-        // snprintf(debug_buf, sizeof(debug_buf), "  Header: [%d][%d][%d][%d]\r\n", 
-        //          packet.msg_id, packet.fragment_num, packet.total_fragments, packet.data_length);
-        // safe_uart_puts(debug_buf);
+        // Send fragment using the new NRF24 library
+        bool success = nrf.write((uint8_t*)&packet, sizeof(fragment_packet_t));
         
-        // Display data content as characters
-        // snprintf(debug_buf, sizeof(debug_buf), "  Data: \"");
-        // safe_uart_puts(debug_buf);
-        // for (int i = 0; i < data_length; i++) {
-        //     char char_buf[2];
-        //     char_buf[0] = packet.data[i];
-        //     char_buf[1] = '\0';
-        //     safe_uart_puts(char_buf);
-        // }
-        // safe_uart_puts("\"\r\n");
-        
-        // Display data content as hex
-        // snprintf(debug_buf, sizeof(debug_buf), "  Hex: ");
-        // safe_uart_puts(debug_buf);
-        // for (int i = 0; i < 10; i++) { // Always show all 10 bytes of the packet
-        //     if (i < 4) {
-        //         // Header bytes
-        //         uint8_t header_byte;
-        //         switch(i) {
-        //             case 0: header_byte = packet.msg_id; break;
-        //             case 1: header_byte = packet.fragment_num; break;
-        //             case 2: header_byte = packet.total_fragments; break;
-        //             case 3: header_byte = packet.data_length; break;
-        //         }
-        //         snprintf(debug_buf, sizeof(debug_buf), "%02X ", header_byte);
-        //     } else {
-        //         // Data bytes
-        //         snprintf(debug_buf, sizeof(debug_buf), "%02X ", packet.data[i-4]);
-        //     }
-        //     safe_uart_puts(debug_buf);
-        // }
-        // safe_uart_puts("\r\n");
-        
-        // Send fragment
-        nrf.sendMessage((uint8_t*)&packet);
-        
-        // snprintf(debug_buf, sizeof(debug_buf), "  Status: SENT\r\n");
-        // safe_uart_puts(debug_buf);
-        
-        // Small delay between fragments
+        // Get detailed status information
+        uint8_t status = nrf.getStatus();
+        uint8_t observe_tx = nrf.getObserveTx();
+        bool carrier = nrf.testCarrier();
         sleep_ms(50);
     }
-    
-    // snprintf(debug_buf, sizeof(debug_buf), "======================\r\n");
-    // safe_uart_puts(debug_buf);
-    // snprintf(debug_buf, sizeof(debug_buf), "Message transmission complete!\r\n");
-    // safe_uart_puts(debug_buf);
-    // snprintf(debug_buf, sizeof(debug_buf), "Total fragments sent: %zu\r\n\r\n", total_fragments);
-    // safe_uart_puts(debug_buf);
 }
 
 // Create JSON message from data
 void create_json_message(char* buffer, size_t buffer_size, const gunshot_message_t* msg) {
     snprintf(buffer, buffer_size, 
-            "{\"node_id\":\"%s\",\"date\":\"%s\",\"time\":\"%s\",\"latitude\":\"%s\",\"longitude\":\"%s\",\"confidence\":%.2f}",
-            msg->node_id, msg->date, msg->time, msg->latitude, msg->longitude, msg->confidence);
+            "{\"node_id\":\"%s\",\"msg\":\"%u\",\"date\":\"%s\",\"time\":\"%s\",\"latitude\":\"%s\",\"longitude\":\"%s\",\"confidence\":%.2f}",
+            msg->node_id, msg->msg_id, msg->date, msg->time, msg->latitude, msg->longitude, msg->confidence);
 }
 
 // Initialize INMP441 microphone
@@ -1017,12 +956,48 @@ int main() {
 
     sleep_ms(100); // give time for things to settle.
     
-    // Initialize NRF24L01
-    nrf.config((uint8_t*)"gyroc", 2, 10); // Name=gyroc, channel=2,messagSize=10
-    nrf.modeTX(); // <---- Set as transmitter.
-    
-    safe_uart_puts("NRF24L01 initialized successfully\r\n");
+    // Initialize NRF24L01 with the new comprehensive library
+    // Initialize the radio
+    if (!nrf.begin()) {
+        printf("ERROR: Failed to initialize NRF24L01!\n");
+        printf("Please check your wiring and power supply.\n");
+        while (1) {
+            // Fast blink to indicate error
+            gpio_put(LED_INBUILT_IN, 1);
+            sleep_ms(100);
+            gpio_put(LED_INBUILT_IN, 0);
+            sleep_ms(100);
+        }
+    }
 
+    printf("NRF24L01 initialized successfully!\n");
+    printf("Chip variant: NRF24L01%s\n", nrf.isConnected() ? "+" : "");    // Configure the radio to match STM32 receiver settings
+    nrf.setPowerLevel(NRF24_POWER_LEVEL_NEG12DBM);    // Low power to match receiver
+    nrf.setDataRate(NRF24_DATA_RATE_2MBPS);           // 2Mbps to match receiver
+    nrf.setChannel(2);                                // Channel 2 to match STM32 receiver
+    nrf.setCRCLength(NRF24_CRC_16BIT);                // 16-bit CRC to match receiver
+    nrf.setAutoAck(true);                             // Enable auto-ack to match receiver
+    nrf.setRetries(5, 15);                            // 5 retries with 4ms delay for reliability
+    nrf.enableDynamicPayloads();                      // Enable dynamic payloads to match receiver
+      // Set communication address (make sure this matches receiver address)
+    uint8_t tx_address[] = {'g', 'y', 'r', 'o', 'c'};
+    nrf.openWritingPipe(tx_address);
+      // Configure as transmitter
+    nrf.setModeTX();
+    printf("Radio Configuration:\n");
+    printf("Channel: %d\n", nrf.getChannel());
+    printf("Data Rate: 2Mbps\n");
+    printf("Power Level: Low\n");
+    printf("CRC Length: 16-bit\n");
+    printf("Auto Ack: Enabled\n");
+    printf("Dynamic Payloads: Enabled\n");
+    printf("TX Address: %c%c%c%c%c\n", tx_address[0], tx_address[1], tx_address[2], tx_address[3], tx_address[4]);
+    
+    // Print detailed module information for debugging
+    printf("\n=== DETAILED DEBUG INFO ===\n");
+    nrf.printDetails();
+    printf("============================\n\n");
+    safe_uart_puts("NRF24L01 initialized successfully\r\n");
 
     // Launch Core 1 for ML processing
     safe_uart_puts("Starting Core 1 (ML Processor)...\r\n");
@@ -1055,18 +1030,13 @@ int main() {
             confidence = latest_confidence;
             mutex_exit(&audio_mutex);
             
-            // char buf[128];
-            // snprintf(buf, sizeof(buf), "\r\nCore 0: Processing gunshot event #%lu\r\n", gunshot_count);
-            // safe_uart_puts(buf);
-            // snprintf(buf, sizeof(buf), "Core 0: Confidence: %.3f\r\n", confidence);
-            // safe_uart_puts(buf);
-            // snprintf(buf, sizeof(buf), "Core 0: Location - Lat: %.6f, Lon: %.6f\r\n", latitude, longitude);
-            // safe_uart_puts(buf);
-            
             // Prepare and send message via NRF24L01
             gunshot_message_t msg;
             strncpy(msg.node_id, NODE_ID, sizeof(msg.node_id) - 1);
             msg.node_id[sizeof(msg.node_id) - 1] = '\0';  // Ensure null termination
+            
+            // Assign unique message ID
+            msg.msg_id = g_gunshot_msg_id++;
             
             // Get GPS date/time if available, fallback to system time
             char gps_date_str[11];
@@ -1099,12 +1069,8 @@ int main() {
             char json_buffer[1024];
             create_json_message(json_buffer, sizeof(json_buffer), &msg);
             
-            // safe_uart_puts("Core 0: Sending gunshot alert via NRF24L01...\r\n");
-            
             // Send message with fragmentation
             nrf24l01_send_message(json_buffer);
-            
-            // safe_uart_puts("Core 0: Gunshot alert sent successfully\r\n\r\n");
             
             // Reset the detection flag
             gunshot_detected = false;
@@ -1143,7 +1109,7 @@ void test_fragmentation() {
     
     // Test 3: JSON message (typical gunshot detection message)
     safe_uart_puts("\r\nTest 3: JSON gunshot message\r\n");
-    char test_json[] = "{\"node_id\":\"01\",\"date\":\"03/07/2025\",\"time\":\"12:34:56\",\"latitude\":\"12.345678\",\"longitude\":\"98.765432\",\"confidence\":0.95}";
+    char test_json[] = "{\"node_id\":\"01\",\"msg\":\"17\",\"date\":\"05/07/2025\",\"time\":\"12:34:56\",\"latitude\":\"12.345678\",\"longitude\":\"98.765432\",\"confidence\":0.95}";
     nrf24l01_send_message(test_json);
     
     safe_uart_puts("\r\n=== Fragmentation Test Complete ===\r\n");

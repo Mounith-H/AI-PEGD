@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Live Gunshot Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    body { margin: 0; padding: 0; }
+    #map { height: 100vh; width: 100vw; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([13.0036, 77.5449], 17); // Default center
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let markers = [];
+
+    function getDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
+    async function updateMap() {
+      try {
+        const res = await fetch("/api/gunshots");
+        const data = await res.json();
+
+        markers.forEach(marker => map.removeLayer(marker));
+        markers = [];
+
+        navigator.geolocation.getCurrentPosition(pos => {
+          const userLat = pos.coords.latitude;
+          const userLon = pos.coords.longitude;
+
+          const userMarker = L.circle([userLat, userLon], {
+            color: 'blue',
+            fillOpacity: 0.3,
+            radius: 300
+          }).addTo(map).bindPopup("📍 You are here");
+
+          markers.push(userMarker);
+
+          data.forEach(p => {
+            const lat = parseFloat(p.latitude);
+            const lon = parseFloat(p.longitude);
+            const dist = getDistanceKm(userLat, userLon, lat, lon).toFixed(2);
+            const marker = L.marker([lat, lon]).addTo(map);
+            marker.bindPopup(
+              `<b>Node:</b> ${p.node_id}<br>` +
+              `<b>Time:</b> ${p.date} ${p.time}<br>` +
+              `<b>Confidence:</b> ${p.confidence}<br>` +
+              `<b>Distance:</b> ${dist} km`
+            );
+            markers.push(marker);
+          });
+        });
+
+      } catch (err) {
+        console.error("❌ Error updating map:", err);
+      }
+    }
+
+    updateMap();
+    setInterval(updateMap, 3000);
+  </script>
+</body>
+</html>
