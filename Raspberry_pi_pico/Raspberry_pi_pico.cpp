@@ -35,11 +35,13 @@
 // - IRQ -> GP7 (Pin 10 on Pico) (optional, can be used for interrupts)
 //
 // Power Control MH-CD42 Module:
-// - Key -> GP17 (Pin 22 on Pico) (PWM) [Very importent, used to power to Pico]
+// - Key -> GP17 (Pin 22 on Pico) (PWM) [Very important, used to power to Pico]
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <time.h>
+#include <cstdio>
 #include <string.h>  // For strncmp, memcpy, memset
 #include <math.h>    // For fabs
 #include <time.h>    // For time functions
@@ -49,71 +51,43 @@
 #include "hardware/gpio.h"
 #include "hardware/pio.h"
 #include "hardware/dma.h"
+#include "hardware/rtc.h"
+#include "hardware/irq.h"
 #include "hardware/clocks.h"
 #include "hardware/uart.h"
 #include "hardware/spi.h"
-#include "inmp441.pio.h"
-#include "lib/ml_model/model_handler.h" 
-#include "lib/ml_model/gunshot_detection_model.h" 
+#include "pico_audio_recorder.h"
 #include "power_control.pio.h"  // This will be generated from power_control.pio
 #include "NRF24.h"
+#include "edge-impulse-sdk/classifier/ei_run_classifier.h"
 
-///////////////////////////////////////////////////////////////////////////////////////
-#define CONFIDENCE_THRESHOLD 0.5f
-///////////////////////////////////////////////////////////////////////////////////////
+extern bool new_read_data;
+extern int16_t *fw_ptr;
 
-#define NRF24_SCK 2
-#define NRF24_MOSI 3
-#define NRF24_MISO 4
-#define NRF24_CSN 5
-#define NRF24_CE 6
-#define NRF24_IRQ 7
+#define ENABLE_DEBUG 1
+#define ENABLE_BOOTLOGO 1
+#define ENABLE_GPS 1
+#define ENABLE_NRF24 1
 
-// Configuration defines for UART and GPIO
+// Define the confidence threshold for gunshot detection --------------------------------------------
+#define Confidence_THRESHOLD 0.8f
+// --------------------------------------------------------------------------------------------------
+
 #define UART_TX_PIN 0
 #define UART_RX_PIN 1
 #define UART_ID uart0
 #define BAUD_RATE 115200
 #define DATA_BITS 8
 #define STOP_BITS 1
-#define PARITY    UART_PARITY_NONE
+#define PARITY  UART_PARITY_NONE
 
-// GPS Configuration
-#define GPS_UART_ID uart1
-#define GPS_UART_TX_PIN 8
-#define GPS_UART_RX_PIN 9
-#define GPS_BAUD_RATE 9600
-#define GPS_DATA_BITS 8
-#define GPS_STOP_BITS 1
-#define GPS_PARITY    UART_PARITY_NONE
-#define GPS_BUFFER_SIZE 256
+#define LED_INBUILT_IN 25       // Built-in LED
+#define LED_PIN 13              // External LED for indication
 
-// GPIO Configuration
-#define INMP441_SCK_PIN 18  // BCLK
-#define INMP441_WS_PIN  19  // LRCLK/WS
-#define INMP441_SD_PIN  20  // DATA
+#define INMP441_SCK_PIN 18      // BCLK
+#define INMP441_WS_PIN  19      // LRCLK/WS
+#define INMP441_SD_PIN  20      // DATA
 
-// LED Configuration
-#define LED_INBUILT_IN 25   // Built-in LED
-#define LED_PIN 13         // External LED for gunshot indication
-
-// Audio Configuration
-#define SAMPLE_RATE 16000
-#define SAMPLE_BUFFER_SIZE 1024
-#define DMA_CHANNEL 0
-#define INMP441_PIO pio0
-#define INMP441_SM  0
-#define DEBUG_SAMPLES 32
-#define MIC_TEST_DURATION_MS 5000
-
-// MD-CD42 Power Control Configuration
-#define POWER_CONTROL_PIN 17   // Key pin for MH-CD42 module
-#define POWER_CONTROL_PIO pio1 // Using pio1 to avoid conflicts
-#define POWER_CONTROL_SM 1     // State machine 1
-#define POWER_FREQ 2           //  frequency
-#define POWER_DUTY_CYCLE 30    // 50% duty cycle
-
-// NRF24L01 Configuration
 #define NRF_SPI_PORT spi0
 #define NRF_SCK_PIN 2  // SPI Clock
 #define NRF_MOSI_PIN 3 // SPI MOSI
@@ -130,27 +104,54 @@
 #define NRF_TX_ADDR     0x10
 #define NRF_RX_ADDR_P0  0x0A
 #define NRF_FIFO_STATUS 0x17
-
-// Register Read/Write commands
 #define NRF_R_REGISTER    0x00
 #define NRF_W_REGISTER    0x20
 #define NRF_NOP           0xFF
-
-// Data rates (RF_SETUP register values)
 #define RF_DR_2MBPS     0x08  // 2 Mbps mode (default)
 #define RF_DR_1MBPS     0x00  // 1 Mbps mode
 #define RF_DR_250KBPS   0x20  // 250 kbps mode
-
-// NRF24L01 Power Levels
 #define RF_PWR_0DBM    0x06  // Maximum power: 0dBm
 #define RF_PWR_NEG_6DBM  0x04  // -6dBm
 #define RF_PWR_NEG_12DBM 0x02  // -12dBm
 #define RF_PWR_NEG_18DBM 0x00  // Minimum power: -18dBm
 
+// NRF24L01 Default Settings
 #define NRF_CHANNEL 2  // Default channel for NRF24L01 (2.4GHz band)
 #define NODE_ID "01"    // Node identifier
 #define MAX_PAYLOAD_SIZE 24  // NRF24L01 max payload size (increased from 10 to 24)
-uint8_t address[5] = {'g','y','r','o','c'};  // 5-byte address gyroc
+
+#define GPS_UART_ID uart1
+#define GPS_UART_TX_PIN 8
+#define GPS_UART_RX_PIN 9
+#define GPS_BAUD_RATE 9600
+#define GPS_DATA_BITS 8
+#define GPS_STOP_BITS 1
+#define GPS_PARITY    UART_PARITY_NONE
+#define GPS_BUFFER_SIZE 256
+
+#define POWER_CONTROL_PIN 17   // Key pin for MH-CD42 module
+#define POWER_CONTROL_PIO pio1 // Using pio1 to avoid conflicts
+#define POWER_CONTROL_SM 1     // State machine 1
+#define POWER_FREQ 2           //  frequency
+#define POWER_DUTY_CYCLE 30    // 50% duty cycle
+
+// --------------------------- LOGO ---------------------------
+
+#if ENABLE_BOOTLOGO
+const char *logo = R"LOGO(
+'##::::'##:'########:'##:::::::
+ ###::'###: ##.....:: ##:::::::
+ ####'####: ##::::::: ##:::::::
+ ## ### ##: ######::: ##:::::::
+ ##. #: ##: ##...:::: ##:::::::
+ ##:.:: ##: ##::::::: ##:::::::
+ ##:::: ##: ########: ########:
+..:::::..::........::........::
+)LOGO";
+#endif
+// --------------------------- LOGO ---------------------------
+
+
 // GPS location structure
 struct gps_location_t {
     bool valid;
@@ -169,17 +170,8 @@ typedef struct {
     float confidence;
 } gunshot_message_t;
 
-
-// GPS Message types we're interested in
 #define NMEA_GPRMC "$GPRMC"
 #define NMEA_GPGGA "$GPGGA"
-
-// Global variables and mutex
-static mutex_t printf_mutex;
-static mutex_t audio_mutex;  // Mutex for audio data sharing between cores
-volatile bool core1_ready = false;
-volatile bool gunshot_detected = false;
-volatile float latest_confidence = 0.0f;  // Latest confidence from ML model
 
 // GPS globals
 static char gps_buffer[GPS_BUFFER_SIZE];
@@ -195,39 +187,70 @@ static float longitude = 0.0f;
 // GPS date/time globals
 static char gps_date[11] = "01/01/2025";  // DD/MM/YYYY format, default fallback
 static char gps_time[9] = "00:00:00";    // HH:MM:SS format, default fallback
+static char local_date[11] = "01/01/2025";  // Local date in DD/MM/YYYY format
+static char local_time[9] = "00:00:00";    // Local time in HH:MM:SS format
 static bool gps_datetime_valid = false;
 
-// Audio buffer
-static int32_t audio_buffer[SAMPLE_BUFFER_SIZE];
 
-// Global NRF24 object
-NRF24 nrf(NRF_SPI_PORT, NRF_SCK_PIN, NRF_MOSI_PIN, NRF_MISO_PIN, 
-          NRF_CSN_PIN, NRF_CE_PIN, NRF_IRQ_PIN);
+// Inter-core communication variables
+static volatile bool core1_ready = false;
+static volatile float latest_confidence = 0.0f;
+static volatile uint32_t gunshot_detections = 0;
+static volatile bool gunshot_detected = false;
 
+// Global variables and mutex
+static mutex_t printf_mutex;
+static mutex_t audio_mutex;  // Mutex for audio data sharing between cores
+
+// Global message ID counter
+static uint8_t g_message_id = 0;
+
+// Global gunshot message ID counter
+static uint16_t g_gunshot_msg_id = 1;  // Start from 1 for readability
+
+bool led_on = false;
+
+
+// Message fragment structure for reliable transmission
+typedef struct {
+    uint8_t msg_id;        // Message ID (0-255)
+    uint8_t fragment_num;  // Current fragment number (0-based)
+    uint8_t total_fragments; // Total number of fragments
+    uint8_t data_length;   // Length of data in this fragment
+    uint8_t data[20];      // Data payload (24 - 4 header bytes = 20 data bytes)
+} fragment_packet_t;
+
+uint8_t address[5] = {'g','y','r','o','c'};  // 5-byte address gyroc
+NRF24 nrf(NRF_SPI_PORT, NRF_SCK_PIN, NRF_MOSI_PIN, NRF_MISO_PIN, NRF_CSN_PIN, NRF_CE_PIN, NRF_IRQ_PIN);
+
+
+// Function declarations
 void init_sync(void);
 void init_uart(void);
 void safe_uart_puts(const char* str);
+void safe_printf(const char* format, ...);
+bool init_ml_model();
+void core1_entry(void);  // Core 1 entry point for ML processing
+void display_boot_logo(void);
 bool init_power_control(void);
 void update_power_control(float freq, float duty_cycle);
 void init_gps(void);
 bool wait_for_gps_fix(uint32_t timeout_ms);
 void process_gps(void);
-void safe_printf(const char* format, ...);
 bool parse_gprmc(const char* sentence, float* out_lat, float* out_lon, bool* out_valid);
 float nmea_to_decimal_degrees(float nmea_coord, char direction);
 void gps_uart_irq_handler();
-void core1_entry(void);
 void get_gps_datetime(char* date_out, char* time_out, bool* valid_out);
 bool test_microphone();
 void nrf24l01_send_message(const char* message);
 void create_json_message(char* buffer, size_t buffer_size, const gunshot_message_t* msg);
-bool init_microphone();
-static inline void configure_dma(void);
-void test_fragmentation(void);
+int raw_feature_get_data(size_t offset, size_t length, float *out_ptr);
+void init_nrf24(void);
+void convert_utc_to_local_date_time(int utc_hour, int utc_min, int utc_sec, int utc_day, int utc_month, int utc_year, int offset_hour, int offset_min, char* out_time_str, char* out_date_str);
 
 // Initialize power control
 bool init_power_control(void) {
-    safe_uart_puts("Initializing power control...\n");
+    safe_uart_puts("Initializing power control...\r\n");
     
     // Load power control program into PIO memory
     PIO pio = POWER_CONTROL_PIO;
@@ -276,41 +299,121 @@ void update_power_control(float freq, float duty_cycle) {
     power_control_set_level(pio, sm, level);
 }
 
-// Initialize mutex for printf synchronization
-void init_sync(void) {
-    mutex_init(&printf_mutex);
-    mutex_init(&audio_mutex);  // Initialize audio data mutex
+void display_boot_logo(void) {
+#if ENABLE_BOOTLOGO
+    printf("%s\n", logo);
+#endif
 }
 
-// Initialize UART for FTDI communication
-void init_uart(void) {
-    uart_init(UART_ID, BAUD_RATE);
-    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
-    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
-    uart_set_hw_flow(UART_ID, false, false);
-    uart_set_format(UART_ID, DATA_BITS, STOP_BITS, PARITY);
-    uart_set_fifo_enabled(UART_ID, false);
-    uart_puts(UART_ID, "\r\n\nUART Successful\r\n");
-    uart_puts(UART_ID, "MEL!\r\n");
+////------------- NRF Functions START ------------////
 
-    // Initialize model handler
-    int init_status = model_init();
-    if (init_status != 0) {
-        safe_uart_puts("ERROR: Failed to initialize model handler\r\n");
-    } else {
-        safe_uart_puts("Model handler initialized successfully\r\n");
+void init_nrf24(void) {
+#if ENABLE_NRF24
+    // Initialize NRF24L01 with the new comprehensive library
+    // Initialize the radio
+    if (!nrf.begin()) {
+        printf("ERROR: Failed to initialize NRF24L01!\n");
+        printf("Please check your wiring and power supply.\n");
+        while (1) {
+            // Fast blink to indicate error
+            gpio_put(LED_INBUILT_IN, 1);
+            sleep_ms(100);
+            gpio_put(LED_INBUILT_IN, 0);
+            sleep_ms(100);
+        }
+    }
+    printf("NRF24L01 initialized successfully!\n");
+    printf("Chip variant: NRF24L01%s\n", nrf.isConnected() ? "+" : "");    // Configure the radio to match STM32 receiver settings
+    nrf.setPowerLevel(NRF24_POWER_LEVEL_NEG12DBM);    // Low power to match receiver
+    nrf.setDataRate(NRF24_DATA_RATE_2MBPS);           // 2Mbps to match receiver
+    nrf.setChannel(2);                                // Channel 2 to match STM32 receiver
+    nrf.setCRCLength(NRF24_CRC_16BIT);                // 16-bit CRC to match receiver
+    nrf.setAutoAck(true);                             // Enable auto-ack to match receiver
+    nrf.setRetries(5, 15);                            // 5 retries with 4ms delay for reliability
+    nrf.enableDynamicPayloads();                      // Enable dynamic payloads to match receiver
+    uint8_t tx_address[] = {'g', 'y', 'r', 'o', 'c'};   // Set communication address (make sure this matches receiver address)
+    nrf.openWritingPipe(tx_address);
+    nrf.setModeTX();// Configure as transmitter
+    printf("Radio Configuration:\n");
+    printf("Channel: %d\n", nrf.getChannel());
+    printf("Data Rate: 2Mbps\n");
+    printf("Power Level: Low\n");
+    printf("CRC Length: 16-bit\n");
+    printf("Auto Ack: Enabled\n");
+    printf("Dynamic Payloads: Enabled\n");
+    printf("TX Address: %c%c%c%c%c\n", tx_address[0], tx_address[1], tx_address[2], tx_address[3], tx_address[4]);
+    printf("\n=== DETAILED DEBUG INFO ===\n");
+    nrf.printDetails();
+    printf("============================\n\n");
+    safe_uart_puts("NRF24L01 initialized successfully\r\n");
+#endif
+}
+
+// Send message via NRF24L01 with fragmentation support
+void nrf24l01_send_message(const char* message) {
+    if (!message) return;
+    
+    size_t message_length = strlen(message);
+    const uint8_t MAX_DATA_PER_FRAGMENT = 20; // 24 byte payload - 4 byte header
+    
+    // Calculate number of fragments needed
+    size_t total_fragments = (message_length + MAX_DATA_PER_FRAGMENT - 1) / MAX_DATA_PER_FRAGMENT;
+    
+    // Limit to 255 fragments (uint8_t limit)
+    if (total_fragments > 255) {
+        // safe_uart_puts("ERROR: Message too long for fragmentation\r\n");
+        return;
+    }
+    
+    // Assign unique message ID
+    uint8_t current_msg_id = g_message_id++;
+    
+    for (size_t fragment_num = 0; fragment_num < total_fragments; fragment_num++) {
+        fragment_packet_t packet;
+        
+        // Set header
+        packet.msg_id = current_msg_id;
+        packet.fragment_num = fragment_num;
+        packet.total_fragments = total_fragments;
+        
+        // Calculate data for this fragment
+        size_t start_pos = fragment_num * MAX_DATA_PER_FRAGMENT;
+        size_t remaining = message_length - start_pos;
+        size_t data_length = (remaining > MAX_DATA_PER_FRAGMENT) ? MAX_DATA_PER_FRAGMENT : remaining;
+        
+        packet.data_length = data_length;
+        
+        // Copy data
+        memset(packet.data, 0, sizeof(packet.data));
+        memcpy(packet.data, message + start_pos, data_length);
+        
+        // Send fragment using the new NRF24 library
+        bool success = nrf.write((uint8_t*)&packet, sizeof(fragment_packet_t));
+        
+        // Get detailed status information
+        uint8_t status = nrf.getStatus();
+        uint8_t observe_tx = nrf.getObserveTx();
+        bool carrier = nrf.testCarrier();
+        sleep_ms(50);
     }
 }
 
-// Safe UART output function
-void safe_uart_puts(const char* str) {
-    mutex_enter_blocking(&printf_mutex);
-    uart_puts(UART_ID, str);
-    mutex_exit(&printf_mutex);
+// Create JSON message from data
+void create_json_message(char* buffer, size_t buffer_size, const gunshot_message_t* msg) {
+    snprintf(buffer, buffer_size, 
+            "{\"node_id\":\"%s\",\"msg\":\"%u\",\"date\":\"%s\",\"time\":\"%s\",\"latitude\":\"%s\",\"longitude\":\"%s\",\"confidence\":%.2f}",
+            msg->node_id, msg->msg_id, msg->date, msg->time, msg->latitude, msg->longitude, msg->confidence);
 }
 
+////------------ NRF Functions END ------------////
+
+////------------ GPS Functions BEGIN ------------////
+
 void init_gps(void) {
+#if ENABLE_GPS
     safe_uart_puts("\r\n=== GPS Initialization Starting ===\r\n");
+    safe_uart_puts("\r\n=== Program Starting (GPS Debug Mode) ===\r\n");
+    safe_uart_puts("Initializing GPS...\r\n");
     
     // Initialize UART for GPS
     uart_init(GPS_UART_ID, GPS_BAUD_RATE);
@@ -343,6 +446,12 @@ void init_gps(void) {
     
     safe_uart_puts("GPS UART initialized with interrupt handling\r\n");
     safe_uart_puts("All received characters will be echoed:\r\n\r\n");
+    safe_uart_puts("Starting GPS monitoring...\r\n");
+    safe_uart_puts("Waiting for initial GPS fix (timeout: 60 seconds)...\r\n");
+    if (wait_for_gps_fix(60000)) safe_uart_puts("GPS fix acquired successfully!\r\n");
+    else safe_uart_puts("GPS fix timeout - continuing without initial fix.\r\n");
+    sleep_ms(100); // give time for things to settle.
+#endif
 }
 
 bool wait_for_gps_fix(uint32_t timeout_ms) {
@@ -461,15 +570,6 @@ void process_gps() {
     // this is only to show the GPS status this is not an error message
     static uint32_t last_status = 0;
 }
-// Safe printf function
-void safe_printf(const char* format, ...) {
-    mutex_enter_blocking(&printf_mutex);
-    va_list args;
-    va_start(args, format);
-    vprintf(format, args);
-    va_end(args);
-    mutex_exit(&printf_mutex);
-}
 
 // Parse GPRMC sentence Returns true if parsing successful and fix is valid
 bool parse_gprmc(const char* sentence, float* out_lat, float* out_lon, bool* out_valid) {
@@ -542,16 +642,25 @@ bool parse_gprmc(const char* sentence, float* out_lat, float* out_lon, bool* out
             char hours[3] = {time_str[0], time_str[1], 0};
             char minutes[3] = {time_str[2], time_str[3], 0};
             char seconds[3] = {time_str[4], time_str[5], 0};
-            snprintf(gps_time, sizeof(gps_time), "%s:%s:%s", hours, minutes, seconds);
+
+            int hour_int    = atoi(hours);
+            int minute_int  = atoi(minutes);
+            int second_int  = atoi(seconds);
+            
             
             // Parse date DDMMYY
             char day[3] = {date_str[0], date_str[1], 0};
             char month[3] = {date_str[2], date_str[3], 0};
             char year[3] = {date_str[4], date_str[5], 0};
-            int year_int = atoi(year) + 2000;  // Convert YY to 20YY
-            snprintf(gps_date, sizeof(gps_date), "%s/%s/%04d", day, month, year_int);
-            
-            gps_datetime_valid = true;           
+            int day_int   = atoi(day);
+            int month_int = atoi(month);
+            int year_int  = atoi(year) + 2000;
+
+
+            convert_utc_to_local_date_time(hour_int, minute_int, second_int, day_int, month_int, year_int, 5, 30, local_time, local_date);
+
+
+            gps_datetime_valid = true;
             mutex_exit(&gps_mutex);
         }
         
@@ -571,355 +680,80 @@ float nmea_to_decimal_degrees(float nmea_coord, char direction) {
     return (direction == 'S' || direction == 'W') ? -decimal : decimal;
 }
 
+void convert_utc_to_local_date_time(int utc_hour, int utc_min, int utc_sec, int utc_day, int utc_month, int utc_year, int offset_hour, int offset_min, char* out_time_str, char* out_date_str) {
+    struct tm t = {
+        .tm_sec = utc_sec,
+        .tm_min = utc_min,
+        .tm_hour = utc_hour,
+        .tm_mday = utc_day,
+        .tm_mon = utc_month - 1, // tm_mon is 0-based
+        .tm_year = utc_year - 1900  // tm_year is years since 1900
+    };
+
+    // Convert to time_t
+    time_t raw_time = mktime(&t);
+
+    // Add time zone offset (in seconds)
+    raw_time += offset_hour * 3600 + offset_min * 60;
+
+    // Convert back to struct tm
+    struct tm *local = gmtime(&raw_time);
+
+    // Format time and date
+    snprintf(out_time_str, 16, "%02d:%02d:%02d", local->tm_hour, local->tm_min, local->tm_sec);
+    snprintf(out_date_str, 16, "%02d/%02d/%04d", local->tm_mday, local->tm_mon + 1, local->tm_year + 1900);
+}
+
+
 // Helper function to safely get GPS date/time
 void get_gps_datetime(char* date_out, char* time_out, bool* valid_out) {
     mutex_enter_blocking(&gps_mutex);
-    strcpy(date_out, gps_date);
-    strcpy(time_out, gps_time);
+    strcpy(date_out, local_date);
+    strcpy(time_out, local_time);
     *valid_out = gps_datetime_valid;
     mutex_exit(&gps_mutex);
 }
+////------------ GPS Functions END ------------////
 
-// Message fragment structure for reliable transmission
-typedef struct {
-    uint8_t msg_id;        // Message ID (0-255)
-    uint8_t fragment_num;  // Current fragment number (0-based)
-    uint8_t total_fragments; // Total number of fragments
-    uint8_t data_length;   // Length of data in this fragment
-    uint8_t data[20];      // Data payload (24 - 4 header bytes = 20 data bytes)
-} fragment_packet_t;
-
-// Global message ID counter
-static uint8_t g_message_id = 0;
-
-// Global gunshot message ID counter
-static uint16_t g_gunshot_msg_id = 1;  // Start from 1 for readability
-
-// Send message via NRF24L01 with fragmentation support
-void nrf24l01_send_message(const char* message) {
-    if (!message) return;
-    
-    size_t message_length = strlen(message);
-    const uint8_t MAX_DATA_PER_FRAGMENT = 20; // 24 byte payload - 4 byte header
-    
-    // Calculate number of fragments needed
-    size_t total_fragments = (message_length + MAX_DATA_PER_FRAGMENT - 1) / MAX_DATA_PER_FRAGMENT;
-    
-    // Limit to 255 fragments (uint8_t limit)
-    if (total_fragments > 255) {
-        // safe_uart_puts("ERROR: Message too long for fragmentation\r\n");
-        return;
-    }
-    
-    // Assign unique message ID
-    uint8_t current_msg_id = g_message_id++;
-    
-    for (size_t fragment_num = 0; fragment_num < total_fragments; fragment_num++) {
-        fragment_packet_t packet;
-        
-        // Set header
-        packet.msg_id = current_msg_id;
-        packet.fragment_num = fragment_num;
-        packet.total_fragments = total_fragments;
-        
-        // Calculate data for this fragment
-        size_t start_pos = fragment_num * MAX_DATA_PER_FRAGMENT;
-        size_t remaining = message_length - start_pos;
-        size_t data_length = (remaining > MAX_DATA_PER_FRAGMENT) ? MAX_DATA_PER_FRAGMENT : remaining;
-        
-        packet.data_length = data_length;
-        
-        // Copy data
-        memset(packet.data, 0, sizeof(packet.data));
-        memcpy(packet.data, message + start_pos, data_length);
-        
-        // Send fragment using the new NRF24 library
-        bool success = nrf.write((uint8_t*)&packet, sizeof(fragment_packet_t));
-        
-        // Get detailed status information
-        uint8_t status = nrf.getStatus();
-        uint8_t observe_tx = nrf.getObserveTx();
-        bool carrier = nrf.testCarrier();
-        sleep_ms(50);
-    }
+// Initialize mutex for printf synchronization
+void init_sync(void) {
+    mutex_init(&printf_mutex);
 }
 
-// Create JSON message from data
-void create_json_message(char* buffer, size_t buffer_size, const gunshot_message_t* msg) {
-    snprintf(buffer, buffer_size, 
-            "{\"node_id\":\"%s\",\"msg\":\"%u\",\"date\":\"%s\",\"time\":\"%s\",\"latitude\":\"%s\",\"longitude\":\"%s\",\"confidence\":%.2f}",
-            msg->node_id, msg->msg_id, msg->date, msg->time, msg->latitude, msg->longitude, msg->confidence);
+// Initialize UART for FTDI communication
+void init_uart(void) {
+    uart_init(UART_ID, BAUD_RATE);
+    gpio_set_function(UART_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(UART_RX_PIN, GPIO_FUNC_UART);
+    uart_set_hw_flow(UART_ID, false, false);
+    uart_set_format(UART_ID, DATA_BITS, STOP_BITS, PARITY);
+    uart_set_fifo_enabled(UART_ID, false);
+    uart_puts(UART_ID, "\r\n\nUART Successful\r\n");
 }
 
-// Initialize INMP441 microphone
-bool init_microphone() {
-    // First run the test
-        safe_uart_puts("\r\nStarting microphone test...\r\n");
-    safe_uart_puts("\r\nTesting INMP441 Microphone:\r\n");
-    safe_uart_puts("1. Checking PIO configuration...\r\n");
-    safe_uart_puts("Checking PIO program size...\r\n");
-    
-    if (!pio_can_add_program(INMP441_PIO, &inmp441_program)) {
-        safe_uart_puts("ERROR: Cannot load PIO program - insufficient space\r\n");
-        safe_uart_puts("\r\nMicrophone initialization failed! Check connections and try again.\r\n");
-        return false;
-    }
-    
-    safe_uart_puts("2. Loading PIO program...\r\n");
-    uint offset = pio_add_program(INMP441_PIO, &inmp441_program);
-    
-    char buf[128];
-    snprintf(buf, sizeof(buf), "   Program loaded at offset %u\r\n", offset);
-    safe_uart_puts(buf);
-    
-    safe_uart_puts("3. Initializing GPIO pins...\r\n");
-    snprintf(buf, sizeof(buf), "   SCK (BCLK): GPIO %d\r\n", INMP441_SCK_PIN);
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "   WS (LRCLK): GPIO %d\r\n", INMP441_WS_PIN);
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "   SD (DATA):  GPIO %d\r\n", INMP441_SD_PIN);
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "   Sample Rate: %d Hz\r\n", SAMPLE_RATE);
-    safe_uart_puts(buf);
-    
-    // Initialize the PIO state machine
-    snprintf(buf, sizeof(buf), "   Initializing PIO state machine %d on PIO%d\r\n", 
-                INMP441_SM, (INMP441_PIO == pio0) ? 0 : 1);
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "   Clock frequency: %lu Hz\r\n", clock_get_hz(clk_sys));
-    safe_uart_puts(buf);
-    
-    inmp441_program_init(INMP441_PIO, INMP441_SM, offset, SAMPLE_RATE, INMP441_SD_PIN, INMP441_SCK_PIN);
-    safe_uart_puts("   PIO initialization complete\r\n");
-    
-    safe_uart_puts("4. Configuring DMA...\r\n");
-    snprintf(buf, sizeof(buf), "   DMA Channel: %d\r\n", DMA_CHANNEL);
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "   Buffer size: %d samples\r\n", SAMPLE_BUFFER_SIZE);
-    safe_uart_puts(buf);
-    configure_dma();
-    safe_uart_puts("   DMA configuration complete\r\n");
-    
-    safe_uart_puts("5. Starting audio capture test...\r\n");
-    safe_uart_puts("   Please make some noise near the microphone!\r\n\r\n");
-    
-    uint32_t start_time = to_ms_since_boot(get_absolute_time());
-    bool received_audio = false;
-    int32_t min_sample = 0x7FFFFFFF;
-    int32_t max_sample = -0x7FFFFFFF;
-    
-    safe_uart_puts("   Waiting for DMA transfer...\r\n");
-
-    while (to_ms_since_boot(get_absolute_time()) - start_time < MIC_TEST_DURATION_MS) {
-        dma_channel_wait_for_finish_blocking(DMA_CHANNEL);
-        
-        
-        // Process samples
-        for (int i = 0; i < DEBUG_SAMPLES; i++) {
-            int32_t sample = audio_buffer[i] >> 8;  // Convert to 24-bit
-            if (sample != 0) {
-                received_audio = true;
-            }
-            if (sample < min_sample) min_sample = sample;
-            if (sample > max_sample) max_sample = sample;
-        }
-        
-        // Restart DMA
-        dma_channel_set_write_addr(DMA_CHANNEL, audio_buffer, true);
-        
-        if (received_audio) {
-            safe_uart_puts("   DMA transfer complete\r\n");
-            break;  // Got some samples, no need to wait longer
-        }
-    }
-    
-    safe_uart_puts("\r\nMicrophone Test Results:\r\n");
-    snprintf(buf, sizeof(buf), "- Audio data received: %s\r\n", received_audio ? "YES" : "NO");
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "- Min sample value: %ld\r\n", min_sample);
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "- Max sample value: %ld\r\n", max_sample);
-    safe_uart_puts(buf);
-    snprintf(buf, sizeof(buf), "- Sample range: %ld\r\n", max_sample - min_sample);
-    safe_uart_puts(buf);
-    
-    if (!received_audio) {
-        safe_uart_puts("\r\nERROR: No audio data received. Please check:\r\n");
-        safe_uart_puts("1. All connections are secure\r\n");
-        safe_uart_puts("2. VDD and GND are properly connected\r\n");
-        safe_uart_puts("3. L/R pin is connected to GND\r\n");
-        safe_uart_puts("\r\nMicrophone initialization failed! Check connections and try again.\r\n");
-        return false;
-    }
-    
-    if (max_sample - min_sample < 1000) {
-        safe_uart_puts("\r\nWARNING: Very low audio range detected.\r\n");
-        safe_uart_puts("Try making louder sounds near the microphone.\r\n");
-    } else {
-        safe_uart_puts("\r\nMicrophone test PASSED! ✓\r\n");
-    }
-
-    // No need to reconfigure since test_microphone already set everything up
-    return true;
+// Safe UART output function
+void safe_uart_puts(const char* str) {
+    mutex_enter_blocking(&printf_mutex);
+    uart_puts(UART_ID, str);
+    mutex_exit(&printf_mutex);
 }
 
-// DMA configuration
-static inline void configure_dma(void) {
-    safe_uart_puts("   Starting DMA configuration...\r\n");
-    
-    // Get default channel configuration
-    dma_channel_config c = dma_channel_get_default_config(DMA_CHANNEL);
-    
-    char buf[64];
-    snprintf(buf, sizeof(buf), "   Got default DMA config for channel %d\r\n", DMA_CHANNEL);
-    safe_uart_puts(buf);
-    
-    // Configure channel
-    channel_config_set_read_increment(&c, false);  // Don't increment read address (reading from same PIO FIFO)
-    channel_config_set_write_increment(&c, true);  // Do increment write address (writing to buffer)
-    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);  // Transfer 32-bit words
-    channel_config_set_dreq(&c, pio_get_dreq(INMP441_PIO, INMP441_SM, false));  // Pace transfers based on PIO
-
-    dma_channel_configure(
-        DMA_CHANNEL,
-        &c,
-        audio_buffer,                    // Destination pointer
-        &INMP441_PIO->rxf[INMP441_SM],  // Source pointer
-        SAMPLE_BUFFER_SIZE,              // Number of transfers
-        true                            // Start immediately
-    );
+// Safe printf function
+void safe_printf(const char* format, ...) {
+    mutex_enter_blocking(&printf_mutex);
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+    mutex_exit(&printf_mutex);
 }
-
-// Core 1 entry point - DEDICATED TO ML MODEL AND AUDIO PROCESSING
-void core1_entry() {
-    safe_uart_puts("\r\n=== CORE 1: ML MODEL PROCESSOR ===\r\n");
-    safe_uart_puts("Core 1: Dedicated to gunshot detection ML model\r\n");
-    sleep_ms(100); // Give time for UART message
-    
-    safe_uart_puts("Core 1: Initializing microphone...\r\n");
-    sleep_ms(100); // Give time for UART message
-    
-    // Initialize microphone
-    safe_uart_puts("Core 1: Starting microphone initialization...\r\n");
-    bool init_success = init_microphone();
-    safe_uart_puts("Core 1: Microphone initialization attempt complete\r\n");
-    
-    if (!init_success) {
-        safe_uart_puts("Core 1: Microphone initialization failed\r\n");
-        safe_uart_puts("Core 1: Check hardware connections and try again\r\n");
-        core1_ready = true;  // Signal core0 even on failure so it doesn't hang
-        while (true) {
-            gpio_put(LED_PIN, true);   // Error indication pattern
-            sleep_ms(100);
-            gpio_put(LED_PIN, false);
-            sleep_ms(900);             // Blink once per second to show core is alive
-        }
-    }
-    
-    safe_uart_puts("Core 1: Microphone initialized successfully\r\n");
-    safe_uart_puts("Core 1: Initializing ML model...\r\n");
-    
-    // Initialize ML model
-    int model_status = model_init();
-    if (model_status != 0) {
-        safe_uart_puts("Core 1: ERROR - ML model initialization failed!\r\n");
-        core1_ready = true;
-        while (true) {
-            gpio_put(LED_PIN, true);   // Fast error blink
-            sleep_ms(50);
-            gpio_put(LED_PIN, false);
-            sleep_ms(50);
-        }
-    }
-    
-    safe_uart_puts("Core 1: ML model initialized successfully\r\n");
-    safe_uart_puts("Core 1: Starting audio processing loop...\r\n");
-    core1_ready = true;  // Signal core0 that we're ready
-    
-    // ML processing variables
-    uint32_t processing_count = 0;
-    uint32_t last_status_update = 0;
-    uint32_t last_debug_update = 0;
-    
-    while (true) {
-        // Wait for DMA transfer to complete
-        dma_channel_wait_for_finish_blocking(DMA_CHANNEL);
-        
-        // Simple audio analysis for debugging
-        int32_t max_sample = 0;
-        int32_t min_sample = 0;
-        for (int i = 0; i < SAMPLE_BUFFER_SIZE; i++) {
-            int32_t sample = audio_buffer[i] >> 8;  // Convert to 24-bit
-            if (sample > max_sample) max_sample = sample;
-            if (sample < min_sample) min_sample = sample;
-        }
-        int32_t amplitude_range = max_sample - min_sample;
-        
-        // Process audio data using the ML model
-        bool detection = model_process_audio(audio_buffer, SAMPLE_BUFFER_SIZE, CONFIDENCE_THRESHOLD);
-        float confidence = model_get_confidence();
-        
-        // Update shared confidence value
-        mutex_enter_blocking(&audio_mutex);
-        latest_confidence = confidence;
-        mutex_exit(&audio_mutex);
-        
-        processing_count++;
-        
-        // Print detailed debug every 10 seconds when confidence is detected
-        uint32_t now = to_ms_since_boot(get_absolute_time());
-        if (now - last_debug_update > 10000 || confidence > 0.1f) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "Core 1 Debug: Frame %lu, Range: %ld, Max: %ld, Min: %ld, Confidence: %.4f\r\n", 
-                     processing_count, amplitude_range, max_sample, min_sample, confidence);
-            safe_uart_puts(buf);
-            last_debug_update = now;
-        }
-        
-        // Print status every 5 seconds (less frequent to reduce UART traffic)
-        // if (now - last_status_update > 5000) {
-        //     char buf[128];
-        //     snprintf(buf, sizeof(buf), "Core 1: Processed %lu audio frames, Latest confidence: %.3f\r\n", 
-        //              processing_count, confidence);
-        //     safe_uart_puts(buf);
-        //     last_status_update = now;
-        // }
-
-        // Control LED based on confidence level
-        if (confidence > 0.5f) {
-            gpio_put(LED_PIN, true);   // High confidence - LED on
-        } else if (confidence > 0.2f) {
-            // Medium confidence - pulse LED
-            gpio_put(LED_PIN, (processing_count % 10) < 5);
-        } else {
-            gpio_put(LED_PIN, false);  // Low confidence - LED off
-        }
-        
-        // If gunshot detected, signal Core 0
-        if (detection) {
-            gunshot_detected = true;
-            // char buf[128];
-            // snprintf(buf, sizeof(buf), "Core 1: *** GUNSHOT DETECTED! *** Confidence: %.3f\r\n", confidence);
-            // safe_uart_puts(buf);
-            
-            // Keep LED on for 2 seconds after detection
-            for (int i = 0; i < 40; i++) {
-                gpio_put(LED_PIN, true);
-                sleep_ms(50);
-            }
-        }
-        
-        // Restart DMA transfer for next audio frame
-        dma_channel_set_write_addr(DMA_CHANNEL, audio_buffer, true);
-    }
-}
-
 
 int main() {
     stdio_init_all();
+    display_boot_logo(); // Display boot logo if enabled
     init_sync();
     init_uart();
-    sleep_ms(20);
+    sleep_ms(100);
     gpio_init(25); // led
 
     // Initialize power control first to ensure system stays powered
@@ -933,151 +767,109 @@ int main() {
         }
     }
     
-
     // Initialize LED for visual debugging
     gpio_init(LED_INBUILT_IN);
     gpio_set_dir(LED_INBUILT_IN, GPIO_OUT);
     gpio_put(LED_INBUILT_IN, true);
     gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);  // Turn off LED initially
+    gpio_set_dir(LED_PIN, GPIO_OUT);
+    gpio_put(LED_PIN, false); // Start with LED off
 
-    safe_uart_puts("\r\n=== Program Starting (GPS Debug Mode) ===\r\n");
-    safe_uart_puts("Initializing GPS...\r\n");
+
     init_gps();
-    safe_uart_puts("Starting GPS monitoring...\r\n");
-    // Wait for initial GPS fix with timeout
-    safe_uart_puts("Waiting for initial GPS fix (timeout: 60 seconds)...\r\n");
-    if (wait_for_gps_fix(60000)) {  // 60 second timeout for first fix
-        safe_uart_puts("GPS fix acquired successfully!\r\n");
-    } else {
-        safe_uart_puts("GPS fix timeout - continuing without initial fix.\r\n");
-    }
-
-
-    sleep_ms(100); // give time for things to settle.
+    init_nrf24();
     
-    // Initialize NRF24L01 with the new comprehensive library
-    // Initialize the radio
-    if (!nrf.begin()) {
-        printf("ERROR: Failed to initialize NRF24L01!\n");
-        printf("Please check your wiring and power supply.\n");
-        while (1) {
-            // Fast blink to indicate error
-            gpio_put(LED_INBUILT_IN, 1);
-            sleep_ms(100);
-            gpio_put(LED_INBUILT_IN, 0);
-            sleep_ms(100);
-        }
-    }
-
-    printf("NRF24L01 initialized successfully!\n");
-    printf("Chip variant: NRF24L01%s\n", nrf.isConnected() ? "+" : "");    // Configure the radio to match STM32 receiver settings
-    nrf.setPowerLevel(NRF24_POWER_LEVEL_NEG12DBM);    // Low power to match receiver
-    nrf.setDataRate(NRF24_DATA_RATE_2MBPS);           // 2Mbps to match receiver
-    nrf.setChannel(2);                                // Channel 2 to match STM32 receiver
-    nrf.setCRCLength(NRF24_CRC_16BIT);                // 16-bit CRC to match receiver
-    nrf.setAutoAck(true);                             // Enable auto-ack to match receiver
-    nrf.setRetries(5, 15);                            // 5 retries with 4ms delay for reliability
-    nrf.enableDynamicPayloads();                      // Enable dynamic payloads to match receiver
-      // Set communication address (make sure this matches receiver address)
-    uint8_t tx_address[] = {'g', 'y', 'r', 'o', 'c'};
-    nrf.openWritingPipe(tx_address);
-      // Configure as transmitter
-    nrf.setModeTX();
-    printf("Radio Configuration:\n");
-    printf("Channel: %d\n", nrf.getChannel());
-    printf("Data Rate: 2Mbps\n");
-    printf("Power Level: Low\n");
-    printf("CRC Length: 16-bit\n");
-    printf("Auto Ack: Enabled\n");
-    printf("Dynamic Payloads: Enabled\n");
-    printf("TX Address: %c%c%c%c%c\n", tx_address[0], tx_address[1], tx_address[2], tx_address[3], tx_address[4]);
+    safe_uart_puts("\r\n=== INMP441 + ML Gunshot Detection System (Dual Core) ===\r\n");
+    safe_uart_puts("Core 0: Microphone initialization and LED control\r\n");
+    safe_uart_puts("Core 1: ML processing and gunshot detection\r\n");
     
-    // Print detailed module information for debugging
-    printf("\n=== DETAILED DEBUG INFO ===\n");
-    nrf.printDetails();
-    printf("============================\n\n");
-    safe_uart_puts("NRF24L01 initialized successfully\r\n");
-
-    // Launch Core 1 for ML processing
-    safe_uart_puts("Starting Core 1 (ML Processor)...\r\n");
+    // Initialize microphone on core 0
+    safe_uart_puts("Initializing microphone on Core 0...\r\n");
+    
+    safe_uart_puts("Microphone initialized successfully on Core 0!\r\n");
+    
+    // Start Core 1 for ML processing
+    safe_uart_puts("Starting Core 1 for ML processing...\r\n");
     multicore_launch_core1(core1_entry);
-
-    // Wait for Core 1 to be ready
+    
+    // Wait for Core 1 to initialize
     safe_uart_puts("Waiting for Core 1 to initialize...\r\n");
     while (!core1_ready) {
         sleep_ms(100);
-        gpio_put(LED_INBUILT_IN, !gpio_get(LED_INBUILT_IN)); // Blink while waiting
     }
-    gpio_put(LED_INBUILT_IN, true); // Solid on when ready
-    safe_uart_puts("Core 1 is ready!\r\n");
-
-    // Main loop - Core 0 handles GPS, NRF24L01, and gunshot event processing
-    safe_uart_puts("\r\n=== CORE 0: COMMUNICATION & GPS HANDLER ===\r\n");
-    safe_uart_puts("Core 0: Monitoring for gunshot events from Core 1...\r\n\r\n");
+    safe_uart_puts("Core 1 ready!\r\n");
     
+    // Core 0 main loop - LED blinking based on gunshot detection
+    safe_uart_puts("Core 0: Starting LED control loop...\r\n");
+    uint32_t last_report = 0;
     uint32_t last_status = 0;
     uint32_t gunshot_count = 0;
+    bool led_on_new = false;
+    
+    while (true) {  
+        if (led_on) {
+            last_report = to_ms_since_boot(get_absolute_time());
+            led_on_new = true; // Turn on LED immediately
+            gpio_put(LED_PIN, true);
+            led_on = false; // Reset flag
+        }
+        if (led_on_new) {
+            // LED on for 1 second, then off
+            if (to_ms_since_boot(get_absolute_time()) - last_report >= 1000) {
+                gpio_put(LED_PIN, false);
+                led_on_new = false; // Turn off LED after 1 second
+            }
+        }
 
-    while (1) {
         // Check if gunshot was detected by Core 1
         if (gunshot_detected) {
             gunshot_count++;
-            
-            // Get current confidence from Core 1
-            float confidence;
-            mutex_enter_blocking(&audio_mutex);
-            confidence = latest_confidence;
-            mutex_exit(&audio_mutex);
-            
-            // Prepare and send message via NRF24L01
-            gunshot_message_t msg;
-            strncpy(msg.node_id, NODE_ID, sizeof(msg.node_id) - 1);
-            msg.node_id[sizeof(msg.node_id) - 1] = '\0';  // Ensure null termination
-            
-            // Assign unique message ID
-            msg.msg_id = g_gunshot_msg_id++;
-            
-            // Get GPS date/time if available, fallback to system time
-            char gps_date_str[11];
-            char gps_time_str[9];
-            bool datetime_valid;
-            get_gps_datetime(gps_date_str, gps_time_str, &datetime_valid);
-            
-            if (datetime_valid) {
-                // Use GPS date/time
-                strncpy(msg.date, gps_date_str, sizeof(msg.date) - 1);
-                strncpy(msg.time, gps_time_str, sizeof(msg.time) - 1);
-                msg.date[sizeof(msg.date) - 1] = '\0';
-                msg.time[sizeof(msg.time) - 1] = '\0';
-                printf("[EVENT] Using GPS date/time: %s %s\n", msg.date, msg.time);
-            } else {
-                // Fallback to system time
-                time_t now = time(NULL);
-                struct tm *t = localtime(&now);
-                strftime(msg.date, sizeof(msg.date), "%d/%m/%Y", t);
-                strftime(msg.time, sizeof(msg.time), "%H:%M:%S", t);
-                printf("[EVENT] Using system date/time: %s %s\n", msg.date, msg.time);
-            }
-            
-            // Set latitude, longitude, and confidence
-            snprintf(msg.latitude, sizeof(msg.latitude), "%.6f", latitude);
-            snprintf(msg.longitude, sizeof(msg.longitude), "%.6f", longitude);
-            msg.confidence = confidence;
-            
-            // Create JSON message
-            char json_buffer[1024];
-            create_json_message(json_buffer, sizeof(json_buffer), &msg);
-            
-            // Send message with fragmentation
-            nrf24l01_send_message(json_buffer);
-            
-            // Reset the detection flag
-            gunshot_detected = false;
+
+            #if ENABLE_NRF24
+                // Prepare and send message via NRF24L01
+                gunshot_message_t msg;
+                strncpy(msg.node_id, NODE_ID, sizeof(msg.node_id) - 1);
+                msg.node_id[sizeof(msg.node_id) - 1] = '\0';  // Ensure null termination
+                msg.msg_id = g_gunshot_msg_id++; // Assign unique message ID
+                
+                // Get GPS date/time if available, fallback to system time
+                char gps_date_str[11];
+                char gps_time_str[9];
+                bool datetime_valid;
+                get_gps_datetime(gps_date_str, gps_time_str, &datetime_valid);
+                
+                if (datetime_valid) {
+                    // Use GPS date/time
+                    strncpy(msg.date, gps_date_str, sizeof(msg.date) - 1);
+                    strncpy(msg.time, gps_time_str, sizeof(msg.time) - 1);
+                    msg.date[sizeof(msg.date) - 1] = '\0';
+                    msg.time[sizeof(msg.time) - 1] = '\0';
+                    printf("[EVENT] Using GPS date/time: %s %s\n", msg.date, msg.time);
+                } else {
+                    // Fallback to system time
+                    time_t now = time(NULL);
+                    struct tm *t = localtime(&now);
+                    strftime(msg.date, sizeof(msg.date), "%d/%m/%Y", t);
+                    strftime(msg.time, sizeof(msg.time), "%H:%M:%S", t);
+                    printf("[EVENT] Using system date/time: %s %s\n", msg.date, msg.time);
+                }
+        
+                snprintf(msg.latitude, sizeof(msg.latitude), "%.6f", latitude); // Set latitude, longitude, and confidence
+                snprintf(msg.longitude, sizeof(msg.longitude), "%.6f", longitude);
+                msg.confidence = latest_confidence;
+                
+                char json_buffer[1024];
+                create_json_message(json_buffer, sizeof(json_buffer), &msg);// Create JSON message
+                #if ENABLE_NRF24
+                nrf24l01_send_message(json_buffer); // Send message with fragmentation
+                led_on = true; // Set LED on flag
+                #endif
+            #endif
+            gunshot_detected = false;// Reset the detection flag
         }
         
         // Print status every 30 seconds
-        uint32_t now = to_ms_since_boot(get_absolute_time());
+        // uint32_t now = to_ms_since_boot(get_absolute_time());
         // if (now - last_status > 30000) {
         //     char buf[128];
         //     snprintf(buf, sizeof(buf), "Core 0: System status - Gunshots detected: %lu, GPS valid: %s\r\n", 
@@ -1088,30 +880,64 @@ int main() {
         
         sleep_ms(50); // Check for events every 50ms
     }
+
     return 0;
 }
 
-// Test fragmentation function
-void test_fragmentation() {
-    safe_uart_puts("\r\n=== Testing NRF24L01 Message Fragmentation ===\r\n");
+// Initialize ML model for gunshot detection
+bool init_ml_model() {
+    safe_uart_puts("Initializing ML model...\r\n");
     
-    // Test 1: Short message (fits in one fragment)
-    safe_uart_puts("Test 1: Short message\r\n");
-    nrf24l01_send_message("Hello");
-    
-    sleep_ms(500);
-    
-    // Test 2: Medium message (needs 2-3 fragments)
-    safe_uart_puts("\r\nTest 2: Medium message\r\n");
-    nrf24l01_send_message("This is a longer message that will need fragmentation");
-    
-    sleep_ms(500);
-    
-    // Test 3: JSON message (typical gunshot detection message)
-    safe_uart_puts("\r\nTest 3: JSON gunshot message\r\n");
-    char test_json[] = "{\"node_id\":\"01\",\"msg\":\"17\",\"date\":\"05/07/2025\",\"time\":\"12:34:56\",\"latitude\":\"12.345678\",\"longitude\":\"98.765432\",\"confidence\":0.95}";
-    nrf24l01_send_message(test_json);
-    
-    safe_uart_puts("\r\n=== Fragmentation Test Complete ===\r\n");
+    return true;
 }
+
+// Function to get raw feature data from the firmware pointer
+int raw_feature_get_data(size_t offset, size_t length, float *out_ptr) {
+    // for (size_t i = 0; i < length; i++) {
+    //     // >> 8 removes least-significant 8 bits from 24-bit INMP441 data
+    //     int16_t sample = (int16_t)(fw_ptr[offset + i] >> 8);
+    //     out_ptr[i] = (float)sample / 32768.0f; // Normalize to -1.0 to 1.0
+    // }
+    // return 0;
+
+    numpy::int16_to_float(fw_ptr+offset, out_ptr, length);
+    return 0;
+}
+
+// Core 1 entry point - handles all ML processing
+void core1_entry() {
+    safe_uart_puts("Core 1: Starting ML processing...\r\n");
+    run_classifier_init();
+    EI_IMPULSE_ERROR res;
+    ei_impulse_result_t result = {nullptr};
+    signal_t features_signal;
+    features_signal.total_length = EI_CLASSIFIER_SLICE_SIZE;
+    features_signal.get_data = &raw_feature_get_data;
+    inmp441_pio_init(INMP441_pio, INMP441_SM, INMP441_SD, INMP441_SCK, INMP441_SAMPLE_RATE);
+    safe_uart_puts("Core 1: Ready for ML processing!\r\n");
+    // Core 1 main loop - ML processing
+    uint8_t f_idx=0;
+    core1_ready = true;  // Signal core0 even on failure so it doesn't hang
+    while (true) {
+        if (new_read_data) {
+            new_read_data = false;
+
+            if (++f_idx >= (EI_CLASSIFIER_SLICES_PER_MODEL_WINDOW)) {
+                res = run_classifier_continuous(&features_signal, &result, false, true);
+                if (res != EI_IMPULSE_OK) ei_printf("ERR: Failed to run classifier (%d)\n", res);
+                ei_printf("%s:%.5f, ", ei_classifier_inferencing_categories[0], result.classification[0].value);
+                ei_printf("%s:%.5f\r\n", ei_classifier_inferencing_categories[1], result.classification[1].value);
+                if((ei_classifier_inferencing_categories[1] == "gunshot") && (result.classification[1].value > Confidence_THRESHOLD)) {
+                    latest_confidence = result.classification[1].value;
+                    gunshot_detected = true;
+                    printf("Gunshot detected!\n");
+                }
+                f_idx=0;
+            }
+        }
+    sleep_ms(10);
+    }
+}
+
+
 

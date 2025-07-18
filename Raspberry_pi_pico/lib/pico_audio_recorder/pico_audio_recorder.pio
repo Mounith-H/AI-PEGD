@@ -1,0 +1,35 @@
+
+;=======  (mono, left channel) get 16 bit in 16 bit frame =======
+.program inmp441
+.origin 0
+.side_set 2  ; ws/clk
+public inmp441_start:
+.wrap_target
+; left channel
+    set y, 6                    side 0b00  ; ignore 1+8 bit
+    nop                         side 0b01  ; one clock delay
+    nop                         side 0b00
+    in pins, 1                  side 0b01  ; MSB signed bit
+left_idle:          
+    nop                         side 0b00
+    jmp y--, left_idle          side 0b01  ; one clock delay+MSB signed bit+7 ignore bit=9 bits
+
+    set x, 14                   side 0b00
+left_channel_loop:
+    in  pins, 1                 side 0b01
+    jmp x--, left_channel_loop  side 0b00  ; 9+15 clocks
+
+    set y, 7                    side 0b01 
+left_idle_1:          
+    nop                         side 0b00
+    jmp y--, left_idle_1        side 0b01 ; cycle:9+15+8
+
+;right channel 
+    set y, 30                   side 0b10
+right_idle_loop:
+    nop                         side 0b11
+    jmp y--, right_idle_loop    side 0b10
+    nop                         side 0b11
+.wrap
+;=======  (mono, left channel) =======
+

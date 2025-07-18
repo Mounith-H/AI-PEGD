@@ -1,0 +1,330 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{url}
+\usepackage{float}
+\usepackage{subcaption}
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    language=Python,
+    showstringspaces=false,
+    commentstyle=\color{gray},
+    keywordstyle=\color{blue},
+    stringstyle=\color{red}
+}
+
+\title{Gunshot Detection for Wildlife Protection: \\
+Machine Learning Model Results and RP2040 Deployment}
+\author{ML-Based Gunshot Detection System}
+\date{July 3, 2025}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document presents comprehensive results from a machine learning-based gunshot detection system designed for wildlife protection. The system utilizes TensorFlow with enhanced feature extraction from audio signals and has been optimized for deployment on RP2040 microcontrollers. The model achieves 97.8\% accuracy with significant size reduction through quantization for edge computing applications.
+\end{abstract}
+
+\section{Introduction}
+
+Wildlife protection requires real-time monitoring systems capable of detecting illegal hunting activities, particularly gunshots. This project implements a machine learning solution using TensorFlow that processes audio signals to distinguish between gunshots and environmental sounds. The system has been optimized for deployment on resource-constrained RP2040 microcontrollers using TensorFlow Lite with INT8 quantization.
+
+\section{Dataset and Methodology}
+
+\subsection{Dataset Composition}
+The training dataset consists of:
+\begin{itemize}
+    \item \textbf{Environment Sounds:} 2,000 audio samples
+    \item \textbf{Gunshot Sounds:} 851 audio samples
+    \item \textbf{Audio Format:} 2-second clips at 22.05 kHz sampling rate
+    \item \textbf{Total Samples:} 2,851 audio files
+\end{itemize}
+
+\subsection{Data Balancing}
+To address class imbalance, the following strategy was employed:
+\begin{itemize}
+    \item Environment sounds: Reduced to 1,702 samples (stratified sampling)
+    \item Gunshot sounds: Oversampled to 1,702 samples
+    \item \textbf{Final balanced dataset:} 3,404 samples (1,702 each class)
+\end{itemize}
+
+\subsection{Feature Extraction}
+The system extracts 3,045 features from each audio clip:
+
+\begin{table}[H]
+\centering
+\caption{Audio Feature Extraction Summary}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Feature Type} & \textbf{Dimensions} & \textbf{Count} \\
+\midrule
+MFCC Coefficients & 20 × 87 frames & 1,740 \\
+Spectral Centroid & 87 frames & 87 \\
+Spectral Rolloff & 87 frames & 87 \\
+Zero Crossing Rate & 87 frames & 87 \\
+Chroma Features & 12 × 87 frames & 1,044 \\
+\midrule
+\textbf{Total Features} & & \textbf{3,045} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Model Architecture}
+
+\subsection{Neural Network Design}
+The enhanced TensorFlow model consists of:
+
+\begin{table}[H]
+\centering
+\caption{Neural Network Architecture}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Layer} & \textbf{Neurons} & \textbf{Activation} & \textbf{Dropout} \\
+\midrule
+Input + Dense & 256 & ReLU & 30\% \\
+BatchNorm + Dense & 128 & ReLU & 40\% \\
+BatchNorm + Dense & 64 & ReLU & 30\% \\
+BatchNorm + Dense & 32 & ReLU & 20\% \\
+Output & 1 & Sigmoid & - \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Training Configuration}
+\begin{itemize}
+    \item \textbf{Optimizer:} Adam (lr=0.001, β₁=0.9, β₂=0.999)
+    \item \textbf{Loss Function:} Binary Crossentropy
+    \item \textbf{Batch Size:} 16
+    \item \textbf{Maximum Epochs:} 100
+    \item \textbf{Early Stopping:} Patience = 15 epochs
+    \item \textbf{Validation Split:} 20\%
+\end{itemize}
+
+\section{Model Performance Results}
+
+\subsection{Primary Metrics}
+The enhanced model achieved the following performance on the test set:
+
+\begin{table}[H]
+\centering
+\caption{Model Performance Metrics}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Metric} & \textbf{Score} \\
+\midrule
+Test Accuracy & 97.80\% \\
+Test Precision & 97.94\% \\
+Test Recall & 97.65\% \\
+F1 Score & 97.79\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Confusion Matrix}
+The confusion matrix on the test set (681 samples):
+
+\begin{table}[H]
+\centering
+\caption{Confusion Matrix Results}
+\begin{tabular}{@{}ccc@{}}
+\toprule
+& \textbf{Predicted Environment} & \textbf{Predicted Gunshot} \\
+\midrule
+\textbf{Actual Environment} & 334 & 7 \\
+\textbf{Actual Gunshot} & 8 & 332 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Classification Report}
+Detailed per-class performance:
+
+\begin{table}[H]
+\centering
+\caption{Per-Class Performance Metrics}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Class} & \textbf{Precision} & \textbf{Recall} & \textbf{F1-Score} & \textbf{Support} \\
+\midrule
+Environment & 0.98 & 0.98 & 0.98 & 341 \\
+Gunshot & 0.98 & 0.98 & 0.98 & 340 \\
+\midrule
+\textbf{Accuracy} & & & 0.98 & 681 \\
+\textbf{Macro Avg} & 0.98 & 0.98 & 0.98 & 681 \\
+\textbf{Weighted Avg} & 0.98 & 0.98 & 0.98 & 681 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{RP2040 Optimization Results}
+
+\subsection{Model Quantization}
+For deployment on RP2040 microcontrollers, the model underwent INT8 quantization:
+
+\begin{table}[H]
+\centering
+\caption{Model Size Optimization}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Model Format} & \textbf{Size} & \textbf{Reduction} \\
+\midrule
+Original (.h5) & 9.51 MB & - \\
+TensorFlow Lite (.tflite) & 0.80 MB & 91.6\% \\
+C Header (.h) & 5.0 MB & - \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Quantized Model Performance}
+The quantized TensorFlow Lite model maintains high accuracy:
+
+\begin{table}[H]
+\centering
+\caption{Quantized Model Test Results}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Input Type & INT8 \\
+Output Type & INT8 \\
+Input Shape & [1, 3045] \\
+Output Shape & [1, 1] \\
+Test Confidence & 99.61\% \\
+Model Size & 820.02 KB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Deployment Specifications}
+
+\subsection{RP2040 Memory Requirements}
+\begin{itemize}
+    \item \textbf{Flash Memory:} ~820 KB for model storage
+    \item \textbf{RAM:} ~100 KB for tensor arena
+    \item \textbf{Additional:} Memory for audio buffer and feature extraction
+\end{itemize}
+
+\subsection{Processing Pipeline}
+\begin{enumerate}
+    \item Audio capture (2-second clips at 22.05 kHz)
+    \item Feature extraction (3,045 features)
+    \item Feature quantization to INT8
+    \item Model inference using TensorFlow Lite Micro
+    \item Threshold-based decision (>0.5 = Gunshot)
+    \item Alert generation
+\end{enumerate}
+
+\section{Test Case Results}
+
+\subsection{Real-time Testing}
+Sample test results from audio files:
+
+\begin{table}[H]
+\centering
+\caption{Sample Test Results}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{File} & \textbf{Prediction} & \textbf{Confidence} & \textbf{Alert Status} \\
+\midrule
+5-261433-A-15.wav & Environment & 94.00\% & No Alert \\
+4 (73).wav & Gunshot & 100.00\% & 🚨 ALERT! \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Technical Implementation}
+
+\subsection{Key Libraries and Dependencies}
+\begin{itemize}
+    \item TensorFlow Nightly (2.20.0.dev)
+    \item Librosa (≥0.9.0) for audio processing
+    \item NumPy (≥1.21.0) for numerical computations
+    \item Scikit-learn (≥1.1.0) for preprocessing and metrics
+\end{itemize}
+
+\subsection{Quantization Strategy}
+\begin{lstlisting}[caption={TensorFlow Lite Quantization Configuration}]
+# INT8 Quantization for RP2040
+converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+converter.inference_input_type = tf.int8
+converter.inference_output_type = tf.int8
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+\end{lstlisting}
+
+\section{Performance Analysis}
+
+\subsection{Strengths}
+\begin{itemize}
+    \item \textbf{High Accuracy:} 97.8\% classification accuracy
+    \item \textbf{Balanced Performance:} Similar precision and recall for both classes
+    \item \textbf{Size Efficiency:} 91.6\% size reduction through quantization
+    \item \textbf{Edge Compatibility:} Optimized for RP2040 deployment
+    \item \textbf{Real-time Capable:} Fast inference with INT8 operations
+\end{itemize}
+
+\subsection{Considerations}
+\begin{itemize}
+    \item Feature extraction computational complexity
+    \item Memory constraints for audio buffering
+    \item Environmental noise adaptation requirements
+    \item Power consumption optimization for battery operation
+\end{itemize}
+
+\section{Deployment Guidelines}
+
+\subsection{Hardware Requirements}
+\begin{itemize}
+    \item \textbf{Microcontroller:} RP2040 Pico
+    \item \textbf{Audio Input:} I2S microphone or ADC
+    \item \textbf{Memory:} 2MB Flash, 264KB RAM
+    \item \textbf{Libraries:} pico-tflmicro with CMSIS-NN
+\end{itemize}
+
+\subsection{Integration Steps}
+\begin{enumerate}
+    \item Include generated header file (\texttt{gunshot\_detection\_model.h})
+    \item Initialize TensorFlow Lite Micro interpreter
+    \item Implement audio capture and feature extraction
+    \item Configure tensor arena (100KB recommended)
+    \item Deploy inference pipeline with alert system
+\end{enumerate}
+
+\section{Conclusion}
+
+The implemented gunshot detection system demonstrates excellent performance with 97.8\% accuracy and successful optimization for RP2040 deployment. The 91.6\% size reduction through INT8 quantization makes it suitable for edge computing applications in wildlife protection scenarios. The system provides a robust, real-time solution for detecting illegal hunting activities with minimal computational resources.
+
+\subsection{Future Enhancements}
+\begin{itemize}
+    \item Audio preprocessing optimization for real-time feature extraction
+    \item Adaptive threshold tuning based on environmental conditions
+    \item Power management strategies for extended battery life
+    \item Multi-class detection for different weapon types
+    \item Wireless communication integration for remote monitoring
+\end{itemize}
+
+\section{Generated Files}
+
+The following files were generated for RP2040 deployment:
+\begin{itemize}
+    \item \texttt{gunshot\_detection\_model.h5} (9.51 MB) - Original TensorFlow model
+    \item \texttt{gunshot\_detection\_model.tflite} (820 KB) - Quantized TensorFlow Lite model
+    \item \texttt{gunshot\_detection\_model.h} (5.0 MB) - C header file for compilation
+    \item \texttt{gunshot\_detection\_model\_scaler.pkl} - Feature scaler for preprocessing
+    \item \texttt{RP2040\_DEPLOYMENT\_GUIDE.md} - Deployment documentation
+\end{itemize}
+
+\end{document}

@@ -1,6 +1,0 @@
-tf-nightly
-tensorflow-model-optimization
-librosa>=0.9.0
-numpy>=1.21.0
-scikit-learn>=1.1.0
-sounddevice>=0.4.0

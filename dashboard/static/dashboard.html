@@ -1,79 +1,115 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
   <title>Live Gunshot Map</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin: 0; padding: 0; }
-    #map { height: 100vh; width: 100vw; }
+    #map { height: 100vh; }
+    .distance-popup {
+      font-size: 14px;
+      font-weight: bold;
+    }
   </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
 </head>
 <body>
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script>
-    const map = L.map('map').setView([13.0036, 77.5449], 17); // Default center
+    const map = L.map('map').setView([13.0037, 77.5449], 14);
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors'
+      maxZoom: 19,
     }).addTo(map);
 
-    let markers = [];
+    let userMarker = null;
+    let distanceLine = null;
+    let distancePopup = null;
+    let latestGunshotMarker = null;
+    const gunshotMarkers = [];
 
-    function getDistanceKm(lat1, lon1, lat2, lon2) {
-      const R = 6371;
-      const dLat = (lat2 - lat1) * Math.PI / 180;
-      const dLon = (lon2 - lon1) * Math.PI / 180;
-      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                Math.sin(dLon/2) * Math.sin(dLon/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
-    }
+    function fetchGunshots() {
+      fetch('/api/gunshots')
+        .then(res => res.json())
+        .then(data => {
+          if (!data.length) return;
 
-    async function updateMap() {
-      try {
-        const res = await fetch("/api/gunshots");
-        const data = await res.json();
+          // Only update map with new markers if new ones arrived
+          const latest = data[data.length - 1];
+          const latestLatLng = [parseFloat(latest.latitude), parseFloat(latest.longitude)];
 
-        markers.forEach(marker => map.removeLayer(marker));
-        markers = [];
+          // If we already placed this latest marker, don't repeat
+          if (gunshotMarkers.length === 0 || gunshotMarkers[gunshotMarkers.length - 1].options.msg !== latest.msg) {
+            const marker = L.marker(latestLatLng, { msg: latest.msg }).addTo(map)
+              .bindPopup(`Gunshot #${latest.msg}<br>Confidence: ${latest.confidence}`)
+              .openPopup();
+            gunshotMarkers.push(marker);
 
-        navigator.geolocation.getCurrentPosition(pos => {
-          const userLat = pos.coords.latitude;
-          const userLon = pos.coords.longitude;
+            // Update latest marker reference
+            latestGunshotMarker = marker;
+          }
 
-          const userMarker = L.circle([userLat, userLon], {
-            color: 'blue',
-            fillOpacity: 0.3,
-            radius: 300
-          }).addTo(map).bindPopup("📍 You are here");
-
-          markers.push(userMarker);
-
-          data.forEach(p => {
-            const lat = parseFloat(p.latitude);
-            const lon = parseFloat(p.longitude);
-            const dist = getDistanceKm(userLat, userLon, lat, lon).toFixed(2);
-            const marker = L.marker([lat, lon]).addTo(map);
-            marker.bindPopup(
-              `<b>Node:</b> ${p.node_id}<br>` +
-              `<b>Time:</b> ${p.date} ${p.time}<br>` +
-              `<b>Confidence:</b> ${p.confidence}<br>` +
-              `<b>Distance:</b> ${dist} km`
-            );
-            markers.push(marker);
-          });
+          // Recompute user line if user location exists
+          if (userMarker) {
+            drawDistanceLine();
+          }
         });
-
-      } catch (err) {
-        console.error("❌ Error updating map:", err);
-      }
     }
 
-    updateMap();
-    setInterval(updateMap, 3000);
+    function drawDistanceLine() {
+      if (!userMarker || !latestGunshotMarker) return;
+
+      const userLatLng = userMarker.getLatLng();
+      const gunshotLatLng = latestGunshotMarker.getLatLng();
+
+      // Remove old line and popup
+      if (distanceLine) map.removeLayer(distanceLine);
+      if (distancePopup) map.removeLayer(distancePopup);
+
+      distanceLine = L.polyline([userLatLng, gunshotLatLng], { color: 'red', dashArray: '6, 6' }).addTo(map);
+
+      const distance = map.distance(userLatLng, gunshotLatLng) / 1000; // in km
+      distancePopup = L.popup()
+        .setLatLng(userLatLng)
+        .setContent(`<div class="distance-popup">Distance: ${distance.toFixed(2)} km</div>`)
+        .openOn(map);
+    }
+
+    function trackUser() {
+      if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser');
+        return;
+      }
+
+      navigator.geolocation.watchPosition(pos => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+
+        if (!userMarker) {
+          userMarker = L.marker([lat, lng], {
+            icon: L.icon({
+              iconUrl: 'https://cdn-icons-png.flaticon.com/512/64/64113.png',
+              iconSize: [30, 30]
+            })
+          }).addTo(map).bindPopup("📍 You are here").openPopup();
+        } else {
+          userMarker.setLatLng([lat, lng]);
+        }
+
+        drawDistanceLine();
+      }, err => {
+        alert('Could not get your location');
+      }, {
+        enableHighAccuracy: true,
+        maximumAge: 1000
+      });
+    }
+
+    trackUser();
+    fetchGunshots();
+    setInterval(fetchGunshots, 5000);
   </script>
 </body>
 </html>
