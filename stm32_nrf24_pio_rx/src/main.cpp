@@ -3,6 +3,9 @@
 #include "printf.h"
 #include "RF24.h"
 
+#define siran_pin PB10 // Pin for Siran mode
+#define LED_PIN PB11 // Pin for LED indication
+
 RF24 radio(PA4, PA3);  // using pin PA4 for the CE pin, and pin PA3 for the CSN pin
 // IRQ pin is connected to PA2 but not used in this basic example
 
@@ -17,14 +20,23 @@ int fragmentCount = 0;
 int expectedFragments = 0; // Will be set from header
 int currentMessageId = -1;
 
+int lastUpdateTime = 0; // Last update time for Siran mode
+bool siranEnabled = false; // Siran mode enabled flag
+
 void parseAndDisplayData(String jsonData);
+void siran();
 
 void setup() {
   Serial.begin(115200);      // USB Serial - for JSON output only
   DebugSerial.begin(115200); // Debug Serial on PA9/PA10 - for debug messages
   
   pinMode(PC13, OUTPUT); // LED pin for indication
-  
+  pinMode(siran_pin, OUTPUT); // Siran mode pin
+  pinMode(LED_PIN, OUTPUT); // LED pin for indication
+  digitalWrite(PC13, HIGH); // Turn off LED initially (active low)
+  digitalWrite(siran_pin, LOW); // Disable Siran mode initially
+  digitalWrite(LED_PIN, LOW); // Turn off LED initially
+
   // Initialize radio
   if (!radio.begin()) {
     DebugSerial.println("Radio hardware not responding!");
@@ -123,9 +135,9 @@ void loop() {
         fragmentCount++;
         
         // Blink LED to indicate reception
-        digitalWrite(PC13, LOW);  // Turn on LED (active low)
+        digitalWrite(LED_PIN, HIGH);  // Turn on LED
         delay(10);
-        digitalWrite(PC13, HIGH); // Turn off LED
+        digitalWrite(LED_PIN, LOW); // Turn off LED
         
         // Check if we've received all expected fragments
         if (fragmentCount >= expectedFragments) {
@@ -174,9 +186,39 @@ void loop() {
     currentMessageId = -1;
     expectedFragments = 0;
   }
-  
+
+  siran();
+  if(Serial.available()){
+    char c = Serial.read();
+    if(c == '0'){
+      siranEnabled = false;
+      DebugSerial.println("Siran disabled");
+    }
+    else DebugSerial.println("Invalid command received: " + String(c));
+  }
   // Add a small delay to prevent overwhelming the serial output
   delay(10);
+}
+
+void siran() {
+  if (siranEnabled) {
+
+    // turn on siran_pin for 2 seconds and off for 1 second and repeat in non blocking way
+    if(millis() - lastUpdateTime > 3000) {
+      digitalWrite(siran_pin, HIGH); // Turn on Siran mode
+      digitalWrite(LED_PIN, HIGH); // Turn on LED indication
+      DebugSerial.println("Siran mode enabled");
+      lastUpdateTime = millis();
+    } else if (millis() - lastUpdateTime > 2000) {
+      digitalWrite(siran_pin, LOW); // Turn off Siran mode
+      digitalWrite(LED_PIN, LOW); // Turn off LED indication
+    }
+    
+  } else {
+      digitalWrite(siran_pin, LOW); // Turn off Siran mode
+      digitalWrite(LED_PIN, LOW); // Turn off LED indication
+  }
+  // This function can be expanded based on the requirements of the Siran mode
 }
 
 void parseAndDisplayData(String jsonData) {
@@ -245,6 +287,7 @@ void parseAndDisplayData(String jsonData) {
     String confidence = jsonData.substring(confStart, confEnd);
     DebugSerial.println("Confidence: " + confidence);
   }
-  
+  siranEnabled = true;
+  DebugSerial.println("Siran enabled");
   DebugSerial.println("==================");
 }
