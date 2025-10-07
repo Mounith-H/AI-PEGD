@@ -1,4 +1,4 @@
-# ML-Based Gunshot Detection for Wildlife Protection
+# AI Powered Edge Based Gunshot Detection for Protecting Wildlife
 
 ## Project Overview
 This project implements an intelligent gunshot detection system using Raspberry Pi Pico for wildlife protection. The system uses machine learning to detect gunshot sounds and reports their location in real-time, helping authorities respond quickly to potential poaching incidents.
