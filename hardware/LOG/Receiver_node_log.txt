@@ -1,0 +1,47 @@
+16:45:41.360->Receiver Node
+16:45:41.360->Pin Configuration: NRF24L01
+16:45:41.360->CE -> PA4
+16:45:41.360->CSN -> PA3
+16:45:41.374->SCK -> PA5
+16:45:41.374->MOSI-> PA7
+16:45:41.374->MISO-> PA6
+16:45:41.374->IRQ -> PA2 (not used)
+16:45:41.382->DEBUG TX -> PA9
+16:45:41.382->DEBUG RX -> PA10
+16:45:41.382->
+16:45:41.382->Radio Configuration:
+16:45:41.382->Channel: 2
+16:45:41.401->Data Rate: 2Mbps
+16:45:41.401->Power Level: Low
+16:45:41.401->CRC Length: 16-bit
+16:45:41.409->Auto Ack: Disabled
+16:45:41.409->Dynamic Payloads: Enabled
+16:45:41.409->Listening for data...
+16:45:41.423->Waiting for incoming transmissions...
+16:45:41.423->Expecting messages with 4-byte header + 20-byte data format
+16:45:41.432->USB Serial: JSON output only
+16:45:41.432->Debug Serial (PA9/PA10): Debug messages
+16:46:35.552->Msg:1 Frag:1/7 DataLen:20 Data:'{"node_id":"01","msg'
+16:46:35.565->Msg:1 Frag:2/7 DataLen:20 Data:'":"1","date":"27/07'
+16:46:35.615->Msg:1 Frag:3/7 DataLen:20 Data:'/2025","time":"16:46'
+16:46:35.665->Msg:1 Frag:4/7 DataLen:20 Data:':35","latitude":"13.'
+16:46:35.715->Msg:1 Frag:5/7 DataLen:20 Data:'003701","longitude":'
+16:46:35.765->Msg:1 Frag:6/7 DataLen:20 Data:'"77.545067","confide'
+16:46:35.812->Msg:1 Frag:7/7 DataLen:14 Data:'nce":0.91,-61}'
+16:46:35.812->
+16:46:35.812->=== COMPLETE MESSAGE RECEIVED ===
+16:46:35.812->Message ID: 1
+16:46:35.812->Total fragments: 7
+16:46:35.845->Complete message: {"node_id":"01","msg":"1","date":"27/07/2025","time":"16:46:35","latitude":"13.003701","longitude":"77.545067","confidence":0.91,-61}
+16:46:35.905->=== PARSED DATA ===
+16:46:35.918->Node ID: 01
+16:46:35.918->Message ID: 1
+16:46:35.918->Date: 27/07/2025
+16:46:35.918->Time: 16:46:35
+16:46:35.918->Latitude: 13.003701
+16:46:36.053->Longitude: 77.545067
+16:46:36.053->Confidence: 0.91
+16:46:36.053->Latency: 36.5 ms
+16:46:36.053->RSSI: -61
+16:46:36.053->Siran enabled
+16:46:36.053->==================

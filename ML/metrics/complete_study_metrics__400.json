@@ -1,0 +1,36 @@
+{
+  "export_timestamp": "2025-07-11T11:37:32.025250",
+  "dataset_info": {
+    "total_samples": 800,
+    "environment_samples": 400,
+    "gunshot_samples": 400,
+    "test_samples": 160,
+    "feature_shape": [
+      44,
+      13,
+      1
+    ]
+  },
+  "model_performance": {
+    "test_accuracy": 0.82773,
+    "test_loss": 0.3972221899032593,
+    "precision": 0.881578947368421,
+    "recall": 0.8375,
+    "f1_score": 0.8589743589743589,
+    "specificity": 0.8875
+  },
+  "confusion_matrix_breakdown": {
+    "true_positives": 73,
+    "true_negatives": 68,
+    "false_positives": 12,
+    "false_negatives": 7
+  },
+  "training_parameters": {
+    "epochs": 10,
+    "batch_size": 8,
+    "validation_split": 0.1,
+    "optimizer": "adam",
+    "loss_function": "binary_crossentropy",
+    "random_state": 42
+  }
+}

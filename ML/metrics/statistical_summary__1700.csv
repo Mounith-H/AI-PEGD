@@ -1,0 +1,5 @@
+Metric,Mean,Std_Deviation,Min_Value,Max_Value,Final_Value
+Training Accuracy,0.8115,0.07684,0.63,0.87,0.87
+Validation Accuracy,0.837,0.06385,0.67,0.88,0.88
+Training Loss,0.428,0.10099,0.34,0.63,0.34
+Validation Loss,0.395,0.09874,0.31,0.57,0.31

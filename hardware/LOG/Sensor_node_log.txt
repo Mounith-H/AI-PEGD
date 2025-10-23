@@ -1,0 +1,105 @@
+
+16:45:39.490->AI Powered Edge Based Gunshot Detection for Protecting Wildlife
+16:45:39.506->
+16:45:39.506->UART Successful
+16:45:39.611->Initializing power control...
+16:45:39.611->Power control initialized successfully
+16:45:39.616->
+16:45:39.616->=== GPS Initialization Starting ===
+16:45:39.616->
+16:45:39.616->=== Program Starting (GPS Debug Mode) ===
+16:45:39.621->Initializing GPS...
+16:45:39.629->GPS UART initialized with interrupt handling
+16:45:39.629->All received characters will be echoed:
+16:45:39.635->
+16:45:39.635->Starting GPS monitoring...
+16:45:39.635->Waiting for initial GPS fix (timeout: 60 seconds)...
+16:45:39.641->
+16:45:39.641->=== Starting GPS Fix Wait ===
+16:45:39.644->Timeout set to: 60000 ms
+16:45:41.349->
+16:45:41.349->=== GPS Fix Obtained! ===
+16:45:41.349->- Time taken: 1705 ms
+16:45:41.349->- Total attempts: 34
+16:45:41.355->- Position:
+16:45:41.355-> Latitude: 13.003770
+16:45:41.355-> Longitude: 77.545044
+16:45:41.360->=========================
+16:45:41.360->
+16:45:41.360->GPS fix acquired successfully!
+16:45:41.474->NRF24L01 initialized successfully!
+16:45:41.474->Chip variant: NRF24L01+
+16:45:41.481->Radio Configuration:
+16:45:41.481->Channel: 2
+16:45:41.481->Data Rate: 2Mbps
+16:45:41.481->Power Level: Low
+16:45:41.486->CRC Length: 16-bit
+16:45:41.486->Auto Ack: Enabled
+16:45:41.486->Dynamic Payloads: Enabled
+16:45:41.492->TX Address: gyroc
+16:45:41.492->
+16:45:41.492->=== DETAILED DEBUG INFO ===
+16:45:41.497->NRF24L01+ Details:
+16:45:41.497->STATUS: 0x0E
+16:45:41.497->CONFIG: 0x0E
+16:45:41.497->EN_AA: 0x3F
+16:45:41.497->EN_RXADDR: 0x03
+16:45:41.503->SETUP_AW: 0x03
+16:45:41.503->SETUP_RETR: 0x5F
+16:45:41.503->RF_CH: 2
+16:45:41.503->RF_SETUP: 0x0A
+16:45:41.509->OBSERVE_TX: 0x00
+16:45:41.509->FIFO_STATUS: 0x11
+16:45:41.509->DYNPD: 0x3F
+16:45:41.513->FEATURE: 0x04
+16:45:41.513->
+16:45:41.513->Data Rate: 2Mbps
+16:45:41.513->Power Level: -12dBm
+16:45:41.513->CRC Length: 16-bit
+16:45:41.519->Address Width: 5 bytes
+16:45:41.519->Channel: 2 (2.402 GHz)
+16:45:41.525->Payload Size: 32 bytes
+16:45:41.525->Auto Retransmit: 15 retries, 1500 µs delay
+16:45:41.531->
+16:45:41.531->Addresses:
+16:45:41.531->TX: 67 79 72 6F 63
+16:45:41.531->RX P0: 00 00 00 00 00 (Size: 32)
+16:45:41.538->RX P1: 00 00 00 00 00 (Size: 32)
+16:45:41.538->
+16:45:41.538->Statistics:
+16:45:41.541->Packets Sent: 0
+16:45:41.541->Packets Received: 0
+16:45:41.541->Packets Lost: 0
+16:45:41.541->============================
+16:45:41.546->
+16:45:41.546->NRF24L01 initialized successfully
+16:45:41.552->
+16:45:41.552->=== INMP441 + ML Gunshot Detection System (Dual Core) ===
+16:45:41.559->Core 0: Microphone initialization and LED control
+16:45:41.559->Core 1: ML processing and gunshot detection
+16:45:41.563->Initializing microphone on Core 0...
+16:45:41.568->Microphone initialized successfully on Core 0!
+16:45:41.568->Starting Core 1 for ML processing...
+16:45:41.574->Waiting for Core 1 to initialize...
+16:45:41.580->Core 1: Starting ML processing...
+16:45:41.580->Core 1: Ready for ML processing!
+16:45:41.680->Core 1 ready!
+16:45:41.680->Core 0: Starting LED control loop...
+16:45:42.627->ESC:0.00000, gunshot:0.00000
+16:45:43.649->ESC:0.00000, gunshot:0.00000
+16:45:44.654->ESC:0.00000, gunshot:0.00000
+16:45:45.726->ESC:0.51953, gunshot:0.48047
+16:45:46.730->ESC:0.59375, gunshot:0.40625
+16:45:47.752->ESC:0.83203, gunshot:0.16797
+16:45:48.767->ESC:0.93359, gunshot:0.06641
+16:45:49.789->ESC:0.91797, gunshot:0.08203
+16:45:50.795->ESC:0.99219, gunshot:0.00781
+16:46:35.461->ESC:0.03125, gunshot:0.96875
+16:46:35.461->Gunshot detected!
+16:46:35.515->[EVENT] Using GPS date/time: 27/07/2025 16:46:35
+16:46:36.528->ESC:0.14062, gunshot:0.85938
+16:46:36.542->ESC:0.28516, gunshot:0.71484
+16:46:37.565->ESC:0.96484, gunshot:0.03516
+16:46:37.582->ESC:0.80859, gunshot:0.19141
+16:46:37.598->ESC:0.97656, gunshot:0.02344
+
